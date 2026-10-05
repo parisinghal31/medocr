@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MedOCR</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --text: #1a1d23; --muted: #6b7280; --line: #e5e7eb;
+    --accent: #0f766e; --accent-soft: #ccfbf1; --high: #b91c1c; --high-bg: #fee2e2;
+    --low: #1d4ed8; --low-bg: #dbeafe; --ok: #15803d; --ok-bg: #dcfce7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --card: #181b21; --text: #e6e8ec; --muted: #9aa1ad; --line: #2a2f38;
+      --accent: #2dd4bf; --accent-soft: #134e4a; --high: #fca5a5; --high-bg: #451a1a;
+      --low: #93c5fd; --low-bg: #172554; --ok: #86efac; --ok-bg: #14321f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+  header h1 { margin: 0; font-size: 24px; }
+  header p { margin: 4px 0 20px; color: var(--muted); }
+  .badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-weight: 600; margin-left: 8px; vertical-align: middle; }
+  .drop { border: 2px dashed var(--line); border-radius: 12px; background: var(--card); padding: 36px 16px; text-align: center; transition: .15s; }
+  .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  .btn { display: inline-block; border: 0; border-radius: 8px; padding: 10px 18px; font: inherit; font-weight: 600; cursor: pointer; background: var(--accent); color: #fff; }
+  @media (prefers-color-scheme: dark) { .btn { color: #042f2e; } }
+  .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .hint { color: var(--muted); font-size: 13px; margin-top: 10px; }
+  .progress { margin-top: 16px; display: none; }
+  .bar { height: 6px; background: var(--line); border-radius: 99px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .status { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
+  @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
+  .card h2 { font-size: 15px; margin: 0 0 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .preview img, .preview canvas { max-width: 100%; border-radius: 6px; border: 1px solid var(--line); display: block; margin-bottom: 8px; }
+  pre { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; max-height: 360px; overflow: auto; background: var(--bg); padding: 10px; border-radius: 8px; margin: 0; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+  .fields label { font-size: 12px; color: var(--muted); display: block; }
+  input.f { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
+  .tablewrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; }
+  td[contenteditable] { outline: none; }
+  td[contenteditable]:focus { background: var(--accent-soft); }
+  .flag { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 99px; }
+  .flag.HIGH { background: var(--high-bg); color: var(--high); }
+  .flag.LOW { background: var(--low-bg); color: var(--low); }
+  .flag.NORMAL { background: var(--ok-bg); color: var(--ok); }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .full { grid-column: 1 / -1; }
+  .hidden { display: none; }
+  .summary { display: flex; gap: 12px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>MedOCR <span class="badge">On-device</span></h1>
+    <p>Upload a lab or medical report (image or PDF). Text is recognised in your browser and turned into structured data. Nothing is sent to a server.</p>
+  </header>
+
+  <div class="drop" id="drop">
+    <input type="file" id="file" accept="image/*,application/pdf" hidden multiple>
+    <button class="btn" id="pick">Upload report</button>
+    <div class="hint">or drag & drop here · JPG, PNG, WEBP, PDF</div>
+    <div class="progress" id="progress">
+      <div class="bar"><div id="barFill"></div></div>
+      <div class="status" id="status">Starting…</div>
+    </div>
+  </div>
+
+  <div class="grid hidden" id="results">
+    <div class="card">
+      <h2>Preview</h2>
+      <div class="preview" id="preview"></div>
+    </div>
+    <div class="card">
+      <h2>Recognised text <button class="btn ghost" id="reparse" title="Re-run parser on edited text">Re-parse</button></h2>
+      <pre id="raw" contenteditable="true" spellcheck="false"></pre>
+    </div>
+
+    <div class="card full">
+      <h2>Patient & report details</h2>
+      <div class="fields" id="fields"></div>
+    </div>
+
+    <div class="card full">
+      <h2>
+        <span>Test results</span>
+        <span class="summary" id="summary"></span>
+      </h2>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Test</th><th>Value</th><th>Unit</th><th>Reference range</th><th>Flag</th><th></th></tr></thead>
+          <tbody id="tests"></tbody>
+        </table>
+      </div>
+      <div class="actions" style="margin-top:12px">
+        <button class="btn ghost" id="addRow">+ Add row</button>
+        <button class="btn" id="dlJson">Download JSON</button>
+        <button class="btn ghost" id="dlCsv">Download CSV</button>
+        <button class="btn ghost" id="copyJson">Copy JSON</button>
+      </div>
+    </div>
+
+    <div class="card full">
+      <h2>JSON output</h2>
+      <pre id="json"></pre>
+    </div>
+  </div>
+</div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+const $ = id => document.getElementById(id);
+const FIELD_DEFS = [
+  ['patient_name', 'Patient name'], ['age', 'Age'], ['sex', 'Sex'],
+  ['patient_id', 'Patient / Lab ID'], ['referring_doctor', 'Referring doctor'],
+  ['lab_name', 'Lab / hospital'], ['collected_date', 'Collected date'],
+  ['reported_date', 'Reported date'], ['sample_type', 'Sample type'],
+];
+let state = { fields: {}, tests: [], rawText: '', fileName: '' };
+let worker = null;
+
+// ---------- upload ----------
+$('pick').onclick = () => $('file').click();
+$('file').onchange = e => handleFiles([...e.target.files]);
+const drop = $('drop');
+['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => handleFiles([...e.dataTransfer.files]));
+
+function setProgress(p, msg) {
+  $('progress').style.display = 'block';
+  $('barFill').style.width = Math.round(p * 100) + '%';
+  if (msg) $('status').textContent = msg;
+}
+
+async function getWorker() {
+  if (worker) return worker;
+  setProgress(0, 'Loading OCR engine (first run downloads ~10 MB, cached afterwards)…');
+  worker = await Tesseract.createWorker('eng', 1, {
+    logger: m => { if (m.status === 'recognizing text') setProgress(m.progress, `Recognising text… ${Math.round(m.progress * 100)}%`); }
+  });
+  await worker.setParameters({ preserve_interword_spaces: '1' });
+  return worker;
+}
+
+async function handleFiles(files) {
+  if (!files.length) return;
+  $('pick').disabled = true;
+  $('preview').innerHTML = '';
+  state.fileName = files.map(f => f.name).join(', ');
+  try {
+    const canvases = [];
+    for (const f of files) {
+      if (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) canvases.push(...await pdfToCanvases(f));
+      else canvases.push(await imageToCanvas(f));
+    }
+    const w = await getWorker();
+    let text = '';
+    for (let i = 0; i < canvases.length; i++) {
+      $('preview').appendChild(canvases[i].preview);
+      setProgress(0, `Page ${i + 1} of ${canvases.length}…`);
+      const { data } = await w.recognize(canvases[i].ocr);
+      text += (i ? '\n\n' : '') + data.text;
+    }
+    state.rawText = text;
+    $('raw').textContent = text;
+    runParse(text);
+    $('results').classList.remove('hidden');
+    setProgress(1, `Done · ${canvases.length} page(s) processed on this device`);
+  } catch (err) {
+    console.error(err);
+    setProgress(0, 'Error: ' + err.message);
+  } finally {
+    $('pick').disabled = false;
+    $('file').value = '';
+  }
+}
+
+// Upscale small images and convert to high-contrast grayscale for better OCR.
+function preprocess(src, w, h) {
+  const scale = Math.min(3, Math.max(1, 2000 / Math.max(w, h)));
+  const c = document.createElement('canvas');
+  c.width = Math.round(w * scale); c.height = Math.round(h * scale);
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(src, 0, 0, c.width, c.height);
+  const img = ctx.getImageData(0, 0, c.width, c.height), d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    let g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    g = Math.max(0, Math.min(255, (g - 128) * 1.4 + 140));
+    d[i] = d[i + 1] = d[i + 2] = g;
+  }
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+
+function imageToCanvas(file) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => {
+      const preview = new Image(); preview.src = img.src;
+      res({ ocr: preprocess(img, img.naturalWidth, img.naturalHeight), preview });
+    };
+    img.onerror = () => rej(new Error('Could not read image ' + file.name));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+async function pdfToCanvases(file) {
+  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const out = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    setProgress(p / pdf.numPages, `Rendering PDF page ${p}/${pdf.numPages}…`);
+    const page = await pdf.getPage(p);
+    const vp = page.getViewport({ scale: 2.5 });
+    const c = document.createElement('canvas');
+    c.width = vp.width; c.height = vp.height;
+    await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+    out.push({ ocr: preprocess(c, c.width, c.height), preview: c });
+  }
+  return out;
+}
+
+// ---------- parsing ----------
+const UNIT_RE = String.raw`(?:g\/dl|gm\/dl|mg\/dl|mg\/l|µg\/dl|ug\/dl|ng\/ml|ng\/dl|pg\/ml|pg|fl|mmol\/l|µmol\/l|umol\/l|meq\/l|iu\/l|u\/l|miu\/ml|µiu\/ml|uiu\/ml|miu\/l|mm\/hr|mm\/1st hr|%|cells\/cumm|cells\/µl|cells\/ul|\/cumm|\/µl|\/ul|\/hpf|\/lpf|lakhs?\/cumm|million\/cumm|mill\/cumm|10\^3\/µl|10\^3\/ul|10\^6\/µl|10\^6\/ul|x10\^9\/l|x10\^12\/l|thou\/mm3|mill\/mm3|mg\/24hrs?|ml\/min(?:\/1\.73m2)?|sec(?:onds)?|ratio|kg\/m2)`;
+const NUM = String.raw`[<>]?\s*\d[\d,]*\.?\d*`;
+const RANGE = String.raw`(?:${NUM}\s*[-–—to]+\s*${NUM}|[<>≤≥]=?\s*\d[\d,]*\.?\d*|(?:upto|up to|less than|more than)\s*\d[\d,]*\.?\d*)`;
+
+const TEST_LINE = new RegExp(
+  String.raw`^\s*([A-Za-z][A-Za-z0-9 ()\/.,'+\-&%]*?[A-Za-z)])\s*[:\-]?\s+` +   // name
+  String.raw`(${NUM}|positive|negative|reactive|non[- ]reactive|nil|absent|present|trace)\s*` +  // value
+  String.raw`([HL]\b|\*)?\s*` +                                                    // inline flag
+  String.raw`(${UNIT_RE})?\s*` +                                                   // unit
+  String.raw`(${RANGE})?` +                                                        // ref range
+  String.raw`\s*(${UNIT_RE})?`,                                                     // unit after range
+  'i');
+
+const SKIP_NAMES = /^(page|date|age|sex|gender|name|patient|dr|ref|reg|sample|lab|tel|phone|mobile|uhid|id|no|time|reported?|collect(?:ed|ion)?|received|printed|released|registered|ref.? by|bill|visit|investigation|test name|result|units?|method|end of report)\b/i;
+
+function cleanNum(s) { return s == null ? null : s.replace(/,/g, '').replace(/\s+/g, ''); }
+
+function pick(text, patterns) {
+  for (const re of patterns) { const m = text.match(re); if (m) return m[1].trim().replace(/\s{2,}/g, ' '); }
+  return '';
+}
+
+function parseReport(text) {
+  const fields = {};
+  const lines = text.split(/\r?\n/).map(l => l.replace(/[|_]{2,}/g, ' ').trim()).filter(Boolean);
+  const stop = String.raw`(?=\s{2,}|\s+(?:age|sex|gender|ref|dr\.?|date|uhid|id|lab|sample|reg)\b|$)`;
+
+  fields.patient_name = pick(text, [
+    new RegExp(String.raw`(?:patient\s*name|name\s*of\s*patient|pt\.?\s*name|^\s*name)\s*[:\-.]?\s*((?:mr|mrs|ms|miss|master|baby|dr)?\.?\s*[A-Za-z][A-Za-z .']+?)${stop}`, 'im'),
+  ]);
+  const ageSex = text.match(/age\s*[\/&]\s*(?:sex|gender)\s*[:\-]?\s*(\d{1,3})\s*(?:y(?:ears?|rs?)?)?\s*[\/,\s]+\s*(male|female|m|f)\b/i);
+  fields.age = ageSex ? ageSex[1] : pick(text, [/\bage\s*[:\-]?\s*(\d{1,3})\s*(?:y|yrs|years)?/i]);
+  const sex = ageSex ? ageSex[2] : pick(text, [/\b(?:sex|gender)\s*[:\-]?\s*(male|female|m|f)\b/i]);
+  fields.sex = sex ? ({ m: 'Male', f: 'Female' }[sex.toLowerCase()] || sex[0].toUpperCase() + sex.slice(1).toLowerCase()) : '';
+  fields.patient_id = pick(text, [new RegExp(String.raw`(?:uhid|patient\s*id|lab\s*(?:no|id)|reg(?:istration)?\.?\s*no|sample\s*id|mrn|visit\s*no|sid)\.?\s*[:\-]?\s*([A-Z0-9\-\/]{3,})`, 'i')]);
+  fields.referring_doctor = pick(text, [new RegExp(String.raw`(?:ref(?:erred)?\.?\s*(?:by|doctor|dr)?\.?|consultant|referring\s*doctor)\s*[:\-]?\s*((?:dr\.?\s*)?[A-Za-z][A-Za-z .]+?)${stop}`, 'im')]);
+  const DATE = String.raw`(\d{1,2}[\/\-.\s](?:\d{1,2}|[A-Za-z]{3,9})[\/\-.\s]\d{2,4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?)?)`;
+  fields.collected_date = pick(text, [new RegExp(String.raw`(?:collect(?:ed|ion)?|sample\s*date|drawn|registered|registration)\s*(?:on|date|date\s*&\s*time)?\s*[:\-]?\s*` + DATE, 'i')]);
+  fields.reported_date = pick(text, [new RegExp(String.raw`(?:report(?:ed)?|released|printed)\s*(?:on|date|date\s*&\s*time)?\s*[:\-]?\s*` + DATE, 'i'), new RegExp(String.raw`\bdate\s*[:\-]?\s*` + DATE, 'i')]);
+  fields.sample_type = pick(text, [/(?:sample\s*type|specimen)\s*[:\-]?\s*([A-Za-z ]+?)(?=\s{2,}|$)/im]);
+  const labLine = lines.slice(0, 5).find(l => /(lab|diagnostic|patholog|hospital|clinic|healthcare|medical)/i.test(l));
+  fields.lab_name = labLine || '';
+
+  const tests = [];
+  for (const line of lines) {
+    const m = line.match(TEST_LINE);
+    if (!m) continue;
+    const name = m[1].replace(/\s{2,}/g, ' ').replace(/[\s:.\-]+$/, '').trim();
+    if (name.length < 2 || SKIP_NAMES.test(name)) continue;
+    if (/^\d/.test(name)) continue;
+    const value = /^[<>\d]/.test(m[2].trim()) ? cleanNum(m[2]) : m[2].trim();
+    tests.push({
+      test: name,
+      value,
+      unit: (m[4] || m[6] || '').trim(),
+      reference_range: (m[5] || '').replace(/\s+/g, ' ').trim(),
+      flag: computeFlag(value, m[5], m[3]),
+    });
+  }
+  return { fields, tests };
+}
+
+function computeFlag(value, range, inline) {
+  if (inline && /^H$/i.test(inline)) return 'HIGH';
+  if (inline && /^L$/i.test(inline)) return 'LOW';
+  const v = parseFloat(String(value).replace(/[<>,\s]/g, ''));
+  if (isNaN(v) || !range) return '';
+  const r = range.replace(/,/g, '');
+  let m;
+  if ((m = r.match(/(\d*\.?\d+)\s*[-–—to]+\s*(\d*\.?\d+)/))) {
+    const lo = +m[1], hi = +m[2];
+    return v < lo ? 'LOW' : v > hi ? 'HIGH' : 'NORMAL';
+  }
+  if ((m = r.match(/(?:<|≤|upto|up to|less than)\s*=?\s*(\d*\.?\d+)/i))) return v > +m[1] ? 'HIGH' : 'NORMAL';
+  if ((m = r.match(/(?:>|≥|more than)\s*=?\s*(\d*\.?\d+)/i))) return v < +m[1] ? 'LOW' : 'NORMAL';
+  return '';
+}
+
+// ---------- rendering ----------
+function runParse(text) {
+  const { fields, tests } = parseReport(text);
+  state.fields = fields; state.tests = tests; state.rawText = text;
+  renderFields(); renderTests(); renderJson();
+}
+
+function renderFields() {
+  $('fields').innerHTML = '';
+  for (const [key, label] of FIELD_DEFS) {
+    const div = document.createElement('div');
+    div.innerHTML = `<label>${label}</label><input class="f">`;
+    const inp = div.querySelector('input');
+    inp.value = state.fields[key] || '';
+    inp.oninput = () => { state.fields[key] = inp.value; renderJson(); };
+    $('fields').appendChild(div);
+  }
+}
+
+function renderTests() {
+  const tb = $('tests'); tb.innerHTML = '';
+  state.tests.forEach((t, i) => {
+    const tr = document.createElement('tr');
+    for (const k of ['test', 'value', 'unit', 'reference_range']) {
+      const td = document.createElement('td');
+      td.contentEditable = 'true'; td.textContent = t[k];
+      td.oninput = () => {
+        t[k] = td.textContent.trim();
+        t.flag = computeFlag(t.value, t.reference_range);
+        tr.querySelector('.flagcell').innerHTML = flagHtml(t.flag);
+        renderJson(); renderSummary();
+      };
+      tr.appendChild(td);
+    }
+    const f = document.createElement('td'); f.className = 'flagcell'; f.innerHTML = flagHtml(t.flag); tr.appendChild(f);
+    const del = document.createElement('td');
+    del.innerHTML = '<button class="btn ghost" style="padding:2px 8px" title="Remove">×</button>';
+    del.firstChild.onclick = () => { state.tests.splice(i, 1); renderTests(); renderJson(); };
+    tr.appendChild(del);
+    tb.appendChild(tr);
+  });
+  if (!state.tests.length) tb.innerHTML = '<tr><td colspan="6" style="color:var(--muted)">No test rows detected. Edit the recognised text and click Re-parse, or add rows manually.</td></tr>';
+  renderSummary();
+}
+
+const flagHtml = f => f ? `<span class="flag ${f}">${f}</span>` : '';
+
+function renderSummary() {
+  const c = { HIGH: 0, LOW: 0, NORMAL: 0 };
+  state.tests.forEach(t => { if (c[t.flag] != null) c[t.flag]++; });
+  $('summary').innerHTML = `<span>${state.tests.length} tests</span><span>${flagHtml('HIGH')} ${c.HIGH}</span><span>${flagHtml('LOW')} ${c.LOW}</span><span>${flagHtml('NORMAL')} ${c.NORMAL}</span>`;
+}
+
+function output() {
+  return {
+    source_file: state.fileName,
+    extracted_at: new Date().toISOString(),
+    patient: Object.fromEntries(FIELD_DEFS.map(([k]) => [k, state.fields[k] || null])),
+    tests: state.tests.map(t => ({ ...t, value_numeric: isNaN(parseFloat(t.value)) ? null : parseFloat(String(t.value).replace(/[<>]/g, '')) })),
+    abnormal: state.tests.filter(t => t.flag === 'HIGH' || t.flag === 'LOW').map(t => t.test),
+  };
+}
+function renderJson() { $('json').textContent = JSON.stringify(output(), null, 2); }
+
+function download(name, content, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([content], { type }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+const baseName = () => (state.fileName.split(',')[0] || 'report').replace(/\.[^.]+$/, '');
+$('dlJson').onclick = () => download(baseName() + '.json', JSON.stringify(output(), null, 2), 'application/json');
+$('dlCsv').onclick = () => {
+  const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const p = state.fields;
+  const head = ['patient_name', 'age', 'sex', 'patient_id', 'reported_date', 'test', 'value', 'unit', 'reference_range', 'flag'];
+  const rows = state.tests.map(t => [p.patient_name, p.age, p.sex, p.patient_id, p.reported_date, t.test, t.value, t.unit, t.reference_range, t.flag]);
+  download(baseName() + '.csv', [head, ...rows].map(r => r.map(esc).join(',')).join('\n'), 'text/csv');
+};
+$('copyJson').onclick = async () => {
+  await navigator.clipboard.writeText(JSON.stringify(output(), null, 2));
+  $('copyJson').textContent = 'Copied!'; setTimeout(() => $('copyJson').textContent = 'Copy JSON', 1200);
+};
+$('addRow').onclick = () => { state.tests.push({ test: '', value: '', unit: '', reference_range: '', flag: '' }); renderTests(); renderJson(); };
+$('reparse').onclick = () => runParse($('raw').innerText);
+</script>
+</body>
+</html>
